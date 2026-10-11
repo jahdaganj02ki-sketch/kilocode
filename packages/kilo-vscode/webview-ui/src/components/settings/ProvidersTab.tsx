@@ -15,6 +15,7 @@ import { useServer } from "../../context/server"
 import { useVSCode } from "../../context/vscode"
 import type { Provider } from "../../types/messages"
 import CustomProviderDialog from "./CustomProviderDialog"
+import ProviderAccountsList from "./ProviderAccountsList"
 import ProviderConnectDialog from "./ProviderConnectDialog"
 import ProviderSelectDialog from "./ProviderSelectDialog"
 import { isPopularProvider, providerIcon, providerNoteKey, sortProviders } from "./provider-catalog"
@@ -292,6 +293,15 @@ const ProvidersTab: Component = () => {
                     </Button>
                   </Show>
                 </div>
+                <Show when={item.id !== "anaconda-desktop" && provider.providerAccounts()[item.id]}>
+                  {(summary) => (
+                    <ProviderAccountsList
+                      providerID={item.id}
+                      summary={summary()}
+                      canManage={canDisconnect(item)}
+                    />
+                  )}
+                </Show>
               </div>
             )}
           </For>

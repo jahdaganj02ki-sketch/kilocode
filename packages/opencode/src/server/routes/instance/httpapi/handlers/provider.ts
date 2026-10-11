@@ -95,11 +95,19 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         )
         if (model) defaults[ProviderV2.ID.kilo] = ModelV2.ID.make(model)
       }
+      const accountSummaries = access.summaries
+        ? yield* access.summaries().pipe(Effect.orElseSucceed(() => ({})))
+        : {}
       return {
-        all: Object.values(validProviders).map((item) => ({
-          ...Provider.toPublicInfo(item),
-          metadata: providerMetadata(item.id),
-        })), // kilocode_change
+        all: Object.values(validProviders).map((item) => {
+          const pub = Provider.toPublicInfo(item)
+          const acct = accountSummaries[item.id]
+          return {
+            ...pub,
+            ...(acct ? { options: { ...pub.options, __kiloAccounts: acct } } : {}),
+            metadata: providerMetadata(item.id),
+          }
+        }), // kilocode_change
         default: defaults,
         connected: Object.keys(connected),
         failed: [...failedSet],

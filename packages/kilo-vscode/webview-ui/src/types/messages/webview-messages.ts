@@ -1567,6 +1567,9 @@ export interface ConnectProviderMessage {
   providerID: string
   apiKey: string
   metadata?: Record<string, string>
+  accountId?: string
+  accountLabel?: string
+  accountMode?: "add" | "edit" | "replace"
 }
 
 export interface AuthorizeProviderOAuthMessage {
@@ -1575,6 +1578,9 @@ export interface AuthorizeProviderOAuthMessage {
   providerID: string
   method: number
   inputs?: Record<string, string>
+  accountId?: string
+  accountLabel?: string
+  accountMode?: "add" | "edit" | "replace"
 }
 
 export interface CompleteProviderOAuthMessage {
@@ -1589,6 +1595,19 @@ export interface DisconnectProviderMessage {
   type: "disconnectProvider"
   requestId: string
   providerID: string
+}
+
+export interface ManageProviderAccountMessage {
+  type: "manageProviderAccount"
+  requestId: string
+  providerID: string
+  action: "select" | "removeAccount" | "updateAccount" | "setFallback" | "clearCooldown"
+  accountId?: string
+  label?: string
+  direction?: "up" | "down"
+  scope?: "global" | "workspace" | "session"
+  sessionID?: string
+  autoFallback?: boolean
 }
 
 export interface SaveCustomProviderMessage {
@@ -1981,6 +2000,7 @@ export type WebviewMessage =
   | AuthorizeProviderOAuthMessage
   | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
+  | ManageProviderAccountMessage
   | AnacondaDesktopWebviewMessage
   | SaveCustomProviderMessage
   | FetchCustomProviderModelsMessage

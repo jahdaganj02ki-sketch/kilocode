@@ -10,6 +10,16 @@ import {
   withCustomProviderDeletions,
 } from "./shared/custom-provider"
 import { isCustomProviderPackage, KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
+import {
+  buildAccountDirectivesMetadata,
+  buildManageAccountAuthPayload,
+  buildOAuthAccountInputs,
+  extractBackendAccountSummary,
+  synthesizeFallbackAccountSummary,
+  type AccountMutationOptions,
+  type ManageAccountActionInput,
+  type ProviderAccountSummary,
+} from "./shared/provider-accounts"
 import { configFeatures, serverFeatures } from "./features"
 
 /**
@@ -50,6 +60,50 @@ function same(a: unknown, b: unknown): boolean {
   return akeys.every((key, index) => key === bkeys[index] && same(a[key], b[key]))
 }
 
+function stripProviderSecretAndAccounts(
+  item: (typeof Object)["prototype"],
+  authStates: Record<string, AuthState>,
+  storedKeys: Record<string, StoredProviderKey>,
+  providerAccounts: Record<string, ProviderAccountSummary>,
+) {
+  const raw = item as Record<string, unknown>
+  const id = typeof raw.id === "string" ? raw.id : ""
+  const options = record(raw.options) ? raw.options : undefined
+  const extracted = id ? extractBackendAccountSummary(id, options) : { cleanedOptions: options }
+  if (id && extracted.summary) {
+    providerAccounts[id] = extracted.summary
+  }
+  if (id && typeof raw.key === "string" && raw.key) {
+    authStates[id] = "api"
+    const baseURL =
+      extracted.cleanedOptions && typeof extracted.cleanedOptions.baseURL === "string"
+        ? extracted.cleanedOptions.baseURL
+        : undefined
+    if (baseURL) storedKeys[id] = { key: raw.key, baseURL }
+  }
+  const hasKey = "key" in raw
+  const hasCleanedOpts = options !== undefined && extracted.cleanedOptions !== options
+  if (!hasKey && !hasCleanedOpts) return item
+  const next = { ...raw }
+  delete next.key
+  if (hasCleanedOpts) next.options = extracted.cleanedOptions
+  return next
+}
+
+function populateFallbackProviderAccounts(
+  connected: ReadonlyArray<string>,
+  all: ReadonlyArray<{ id: string }>,
+  authStates: Record<string, AuthState>,
+  providerAccounts: Record<string, ProviderAccountSummary>,
+) {
+  for (const connId of connected) {
+    if (connId === KILO_PROVIDER_ID || providerAccounts[connId]) continue
+    const found = all.find((p) => p.id === connId) as { source?: string } | undefined
+    const fallback = synthesizeFallbackAccountSummary(connId, authStates[connId], found?.source)
+    if (fallback) providerAccounts[connId] = fallback
+  }
+}
+
 /** Fetch provider availability and authentication state without exposing stored credentials. */
 export async function fetchProviderData(client: KiloClient, dir: string) {
   const authRequest =
@@ -71,25 +125,14 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
   ])
   const authStates: Record<string, AuthState> = {}
   const storedKeys: Record<string, StoredProviderKey> = {}
-  const all = response.all.map((item) => {
-    const raw = item as Record<string, unknown>
-    if (typeof raw.id === "string" && typeof raw.key === "string" && raw.key) {
-      authStates[raw.id] = "api"
-      // Retain the key on the extension side so model fetches for an existing
-      // provider can authenticate without the webview ever seeing the secret
-      // (#10139). Only providers with a configured baseURL are retained — the
-      // fetch handler requires a URL match before applying a stored key.
-      const options = record(raw.options) ? raw.options : undefined
-      const baseURL = options && typeof options.baseURL === "string" ? options.baseURL : undefined
-      if (baseURL) storedKeys[raw.id] = { key: raw.key, baseURL }
-    }
-    if (!("key" in raw)) return item
-    const next = { ...raw }
-    delete next.key
-    return next as (typeof response.all)[number]
-  })
+  const providerAccounts: Record<string, ProviderAccountSummary> = {}
+  const all = response.all.map(
+    (item) =>
+      stripProviderSecretAndAccounts(item, authStates, storedKeys, providerAccounts) as (typeof response.all)[number],
+  )
   delete authStates[KILO_PROVIDER_ID]
   if (kiloAuth?.authenticated && kiloAuth.type) authStates[KILO_PROVIDER_ID] = kiloAuth.type
+  populateFallbackProviderAccounts(response.connected, all, authStates, providerAccounts)
   const organizationId = kiloAuth ? (kiloAuth.organizationId ?? null) : undefined
   const defaults = { ...response.default }
   if (organizationId) {
@@ -109,6 +152,7 @@ export async function fetchProviderData(client: KiloClient, dir: string) {
     },
     authMethods,
     authStates,
+    providerAccounts,
     storedKeys,
     organizationId,
     ready: !!kiloAuth,
@@ -319,11 +363,12 @@ export async function connectProvider(
   providerID: string,
   apiKey: string,
   metadata?: Record<string, unknown>,
+  account?: AccountMutationOptions,
 ) {
   const id = validateID(ctx, requestId, providerID, "connect")
   if (!id) return
   try {
-    const meta = cleanMetadata(metadata)
+    const meta = buildAccountDirectivesMetadata(cleanMetadata(metadata), account)
     const auth = meta ? { type: "api" as const, key: apiKey, metadata: meta } : { type: "api" as const, key: apiKey }
     await ctx.client.auth.set({ providerID: id, auth }, { throwOnError: true })
     await ctx.disposeGlobal(`provider connect (${id})`)
@@ -340,12 +385,14 @@ export async function authorizeProviderOAuth(
   providerID: string,
   method: number,
   inputs?: Record<string, string>,
+  account?: AccountMutationOptions,
 ) {
   const id = validateID(ctx, requestId, providerID, "authorize")
   if (!id) return
   try {
+    const mergedInputs = buildOAuthAccountInputs(inputs, account)
     const { data: authorization } = await ctx.client.provider.oauth.authorize(
-      { providerID: id, method, directory: ctx.workspaceDir, inputs },
+      { providerID: id, method, directory: ctx.workspaceDir, inputs: mergedInputs },
       { throwOnError: true },
     )
     if (!authorization) {
@@ -361,6 +408,30 @@ export async function authorizeProviderOAuth(
       "authorize",
       ctx.getErrorMessage(error) || "Failed to start provider authorization",
     )
+  }
+}
+
+export async function manageProviderAccount(
+  ctx: ActionContext,
+  requestId: string,
+  providerID: string,
+  input: ManageAccountActionInput,
+) {
+  const id = validateID(ctx, requestId, providerID, "connect")
+  if (!id) return
+  try {
+    const auth = buildManageAccountAuthPayload({
+      ...input,
+      directory: input.directory ?? ctx.workspaceDir,
+    })
+    await ctx.client.auth.set({ providerID: id, auth }, { throwOnError: true })
+    if (input.action === "select" || input.action === "removeAccount") {
+      await ctx.disposeGlobal(`provider account ${input.action} (${id})`)
+    }
+    await ctx.fetchAndSendProviders()
+    ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
+  } catch (error) {
+    postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to manage provider account")
   }
 }
 

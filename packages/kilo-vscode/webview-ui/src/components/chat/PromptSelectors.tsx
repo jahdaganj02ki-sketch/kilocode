@@ -12,12 +12,13 @@
  *   (`data-peek`).
  */
 
-import { type Component, type JSX, onCleanup, onMount } from "solid-js"
+import { type Component, type JSX, Show, onCleanup, onMount } from "solid-js"
 import { reserve } from "./prompt-fold"
 
 interface Props {
   agent?: JSX.Element
   model?: JSX.Element
+  account?: JSX.Element
   variant?: JSX.Element
 }
 
@@ -172,6 +173,11 @@ export const PromptSelectors: Component<Props> = (props) => {
       <div class="prompt-selector" data-part="model">
         {props.model}
       </div>
+      <Show when={props.account}>
+        <div class="prompt-selector" data-part="account">
+          {props.account}
+        </div>
+      </Show>
       <div class="prompt-selector" data-part="variant">
         {props.variant}
       </div>

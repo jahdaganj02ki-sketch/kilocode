@@ -108,6 +108,7 @@ const live: Layer.Layer<
         mode: input.agent.mode,
       })
 
+      Auth.setExecutionSession({ sessionID: input.sessionID }) // kilocode_change
       const [language, cfg, item, info] = yield* Effect.all(
         [
           provider.getLanguage(input.model),

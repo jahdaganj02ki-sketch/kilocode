@@ -7,7 +7,14 @@
 import { batch, createContext, useContext, createSignal, createMemo, onCleanup } from "solid-js"
 import type { ParentComponent, Accessor } from "solid-js"
 import { useVSCode } from "./vscode"
-import type { Provider, ProviderModel, ModelSelection, ExtensionMessage, ProviderAuthState } from "../types/messages"
+import type {
+  Provider,
+  ProviderModel,
+  ModelSelection,
+  ExtensionMessage,
+  ProviderAuthState,
+  ProviderAccountSummary,
+} from "../types/messages"
 import type { ProviderAuthMethod } from "@kilocode/sdk/v2/client"
 import { flattenModels, findModel as _findModel, isModelValid as isValid } from "./provider-utils"
 import { KILO_AUTO } from "../../../src/shared/provider-model"
@@ -25,6 +32,7 @@ interface ProviderContextValue {
   findModel: (selection: ModelSelection | null) => EnrichedModel | undefined
   authMethods: Accessor<Record<string, ProviderAuthMethod[]>>
   authStates: Accessor<Record<string, ProviderAuthState>>
+  providerAccounts: Accessor<Record<string, ProviderAccountSummary>>
   isModelValid: (selection: ModelSelection | null) => boolean
   /** The organization's Kilo catalog failed to load; the host retries until it recovers. */
   kiloUnavailable: Accessor<boolean>
@@ -43,6 +51,7 @@ export const ProviderProvider: ParentComponent = (props) => {
   const [defaultSelection, setDefaultSelection] = createSignal<ModelSelection>(KILO_AUTO)
   const [authMethods, setAuthMethods] = createSignal<Record<string, ProviderAuthMethod[]>>({})
   const [authStates, setAuthStates] = createSignal<Record<string, ProviderAuthState>>({})
+  const [providerAccounts, setProviderAccounts] = createSignal<Record<string, ProviderAccountSummary>>({})
   const [kiloUnavailable, setKiloUnavailable] = createSignal(false)
 
   const models = createMemo<EnrichedModel[]>(() => flattenModels(providers()))
@@ -87,6 +96,7 @@ export const ProviderProvider: ParentComponent = (props) => {
       setDefaultSelection(message.defaultSelection)
       setAuthMethods(message.authMethods)
       setAuthStates(message.authStates)
+      setProviderAccounts(message.providerAccounts ?? {})
       setKiloUnavailable(message.kiloUnavailable ?? false)
     })
   })
@@ -128,6 +138,7 @@ export const ProviderProvider: ParentComponent = (props) => {
     findModel,
     authMethods,
     authStates,
+    providerAccounts,
     isModelValid,
     kiloUnavailable,
   }

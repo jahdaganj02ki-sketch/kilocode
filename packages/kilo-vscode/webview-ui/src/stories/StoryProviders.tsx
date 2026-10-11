@@ -117,6 +117,7 @@ const MockProviderProvider: ParentComponent<{ kiloAuth?: boolean; training?: boo
     findModel: (sel: any) => _findModel(models(), sel),
     authMethods: () => ({}),
     authStates: () => (props.kiloAuth ? { kilo: "oauth" } : {}) as Record<string, ProviderAuthState>,
+    providerAccounts: () => ({}),
     isModelValid: () => true,
     kiloUnavailable: () => false,
   }

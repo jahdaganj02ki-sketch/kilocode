@@ -1825,7 +1825,14 @@ const layer = Layer.effect(
 
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
 
-    async function resolveSDK(model: Model, s: State, envs: Record<string, string | undefined>) {
+    // kilocode_change start
+    async function resolveSDK(
+      model: Model,
+      s: State,
+      envs: Record<string, string | undefined>,
+      overrideKey?: string,
+    ) {
+      // kilocode_change end
       try {
         const provider = s.providers[model.providerID]
         const options = { ...provider.options }
@@ -1873,7 +1880,8 @@ const layer = Layer.effect(
         })
 
         if (baseURL !== undefined) options["baseURL"] = baseURL
-        if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key
+        const effectiveApiKey = overrideKey ?? provider.key // kilocode_change
+        if (options["apiKey"] === undefined && effectiveApiKey) options["apiKey"] = effectiveApiKey // kilocode_change
         if (model.headers)
           options["headers"] = {
             ...options["headers"],
@@ -2015,13 +2023,21 @@ const layer = Layer.effect(
     const getLanguage = Effect.fn("Provider.getLanguage")(function* (model: Model) {
       const s = yield* InstanceState.get(state)
       const envs = yield* env.all()
-      const key = `${model.providerID}/${model.id}`
+      // kilocode_change start - resolve active multi-account key dynamically per call
+      const provider = s.providers[model.providerID]
+      const activeAuth = yield* auth.get(model.providerID).pipe(Effect.orElseSucceed(() => undefined))
+      const activeKey =
+        provider?.source !== "env" && activeAuth ? providerKey(model.providerID, activeAuth) : undefined
+      const effectiveKey = activeKey ?? provider?.key
+      const key = effectiveKey
+        ? `${model.providerID}/${model.id}/${Hash.fast(effectiveKey)}`
+        : `${model.providerID}/${model.id}`
+      // kilocode_change end
       if (s.models.has(key)) return s.models.get(key)!
 
-      const provider = s.providers[model.providerID]
       return yield* EffectPromise.refineRejection(
         async () => {
-          const sdk = await resolveSDK(model, s, envs)
+          const sdk = await resolveSDK(model, s, envs, activeKey) // kilocode_change
           const language = s.modelLoaders[model.providerID]
             ? await s.modelLoaders[model.providerID](
                 sdk,

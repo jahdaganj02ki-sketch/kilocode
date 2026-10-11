@@ -106,6 +106,7 @@ export interface Interface {
 interface State {
   hooks: Record<ProviderV2.ID, Hook>
   pending: Map<ProviderV2.ID, AuthOAuthResult>
+  pendingAccounts: Map<ProviderV2.ID, Auth.SetAccountOptions> // kilocode_change
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ProviderAuth") {}
@@ -130,6 +131,7 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | ModelCa
             ),
           ),
           pending: new Map<ProviderV2.ID, AuthOAuthResult>(),
+          pendingAccounts: new Map<ProviderV2.ID, Auth.SetAccountOptions>(), // kilocode_change
         }
       }),
     )
@@ -170,22 +172,39 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | ModelCa
     const authorize = Effect.fn("ProviderAuth.authorize")(function* (
       input: { providerID: ProviderV2.ID } & AuthorizeInput,
     ) {
-      const { hooks, pending } = yield* InstanceState.get(state)
+      const { hooks, pending, pendingAccounts } = yield* InstanceState.get(state) // kilocode_change
       const method = hooks[input.providerID].methods[input.method]
       if (method.type !== "oauth") return
 
-      if (method.prompts && input.inputs) {
+      // kilocode_change start - extract multi-account directives from inputs before plugin authorize
+      let cleanInputs = input.inputs
+      if (input.inputs) {
+        const accountId = input.inputs.__accountId?.trim() || undefined
+        const accountLabel = input.inputs.__accountLabel?.trim() || undefined
+        const modeRaw = input.inputs.__accountMode?.trim()
+        const accountMode = modeRaw === "add" || modeRaw === "edit" || modeRaw === "replace" ? modeRaw : undefined
+        if (accountId || accountLabel || accountMode) {
+          pendingAccounts.set(input.providerID, { accountId, accountLabel, accountMode })
+        } else {
+          pendingAccounts.delete(input.providerID)
+        }
+        const filtered = Object.entries(input.inputs).filter(([k]) => !k.startsWith("__account"))
+        cleanInputs = filtered.length > 0 ? Object.fromEntries(filtered) : undefined
+      } else {
+        pendingAccounts.delete(input.providerID)
+      }
+
+      if (method.prompts && cleanInputs) {
         for (const prompt of method.prompts) {
-          if (prompt.type === "text" && prompt.validate && input.inputs[prompt.key] !== undefined) {
-            const error = prompt.validate(input.inputs[prompt.key])
+          if (prompt.type === "text" && prompt.validate && cleanInputs[prompt.key] !== undefined) {
+            const error = prompt.validate(cleanInputs[prompt.key])
             if (error) return yield* new ValidationFailed({ field: prompt.key, message: error })
           }
         }
       }
 
-      // kilocode_change start
       const result = yield* Effect.tryPromise({
-        try: () => method.authorize(input.inputs),
+        try: () => method.authorize(cleanInputs),
         catch: (err) => new Auth.AuthError({ message: errorMessage(err), cause: err }),
       })
       // kilocode_change end
@@ -200,7 +219,7 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | ModelCa
     const callback = Effect.fn("ProviderAuth.callback")(function* (
       input: { providerID: ProviderV2.ID } & CallbackInput,
     ) {
-      const pending = (yield* InstanceState.get(state)).pending
+      const { pending, pendingAccounts } = yield* InstanceState.get(state) // kilocode_change
       const match = pending.get(input.providerID)
       if (!match) return yield* new OauthMissing({ providerID: input.providerID })
       if (match.method === "code" && !input.code) {
@@ -212,26 +231,37 @@ const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | ModelCa
       )
       if (!result || result.type !== "success") return yield* new OauthCallbackFailed({})
 
+      // kilocode_change start
+      const accountMeta = pendingAccounts.get(input.providerID)
+      pendingAccounts.delete(input.providerID)
+
       if ("key" in result) {
-        yield* auth.set(input.providerID, {
-          type: "api",
-          key: result.key,
-          ...(result.metadata ? { metadata: result.metadata } : {}),
-        })
+        yield* auth.set(
+          input.providerID,
+          {
+            type: "api",
+            key: result.key,
+            ...(result.metadata ? { metadata: result.metadata } : {}),
+          },
+          accountMeta,
+        )
       }
 
       if ("refresh" in result) {
         const { type: _, provider: __, refresh, access, expires, ...extra } = result
-        yield* auth.set(input.providerID, {
-          type: "oauth",
-          access,
-          refresh,
-          expires,
-          ...extra,
-        })
+        yield* auth.set(
+          input.providerID,
+          {
+            type: "oauth",
+            access,
+            refresh,
+            expires,
+            ...extra,
+          },
+          accountMeta,
+        )
       }
 
-      // kilocode_change start - Update telemetry identity on Kilo auth
       if (input.providerID === "kilo") {
         const info = yield* auth.get(input.providerID)
         if (info) {

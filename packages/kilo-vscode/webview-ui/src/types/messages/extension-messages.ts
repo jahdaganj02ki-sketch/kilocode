@@ -48,7 +48,13 @@ export interface BackgroundJobInfo {
   }
 }
 import type { QuestionRequest, SuggestionRequest, TodoItem } from "./questions"
-import type { ModelSelection, ModelUsageMap, Provider, ProviderAuthState } from "./providers"
+import type {
+  ModelSelection,
+  ModelUsageMap,
+  Provider,
+  ProviderAccountSummary,
+  ProviderAuthState,
+} from "./providers"
 import type { SpeechToTextModelDef } from "../../../../src/speech-to-text/models"
 import type { AgentInfo, SkillInfo, SlashCommandInfo } from "./agents"
 import type {
@@ -554,6 +560,7 @@ export interface ProvidersLoadedMessage {
   defaultSelection: ModelSelection
   authMethods: Record<string, ProviderAuthMethod[]>
   authStates: Record<string, ProviderAuthState>
+  providerAccounts?: Record<string, ProviderAccountSummary>
   /** The organization's Kilo catalog failed to load, so Kilo has no models to pick. */
   kiloUnavailable?: boolean
 }

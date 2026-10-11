@@ -47,6 +47,7 @@ import { useProvider } from "../../context/provider"
 import { ModelSelector, ModelSelectorBase } from "../shared/ModelSelector"
 import { ModeSwitcher } from "../shared/ModeSwitcher"
 import { ThinkingSelector } from "../shared/ThinkingSelector"
+import { AccountSelector } from "../shared/AccountSelector"
 import { SandboxButtonBase, SandboxTooltipContent } from "../shared/SandboxButton"
 import { SpeechToTextButton } from "../speech-to-text/SpeechToTextButton"
 import { canUseSpeechToText, selectedSpeechToTextModel } from "../speech-to-text/availability"
@@ -2381,6 +2382,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         <PromptSelectors
           agent={<ModeSwitcher sessionID={sid} blocked={props.blocked?.() ?? false} hint={modeHint()} />}
           model={<ModelSelector sessionID={sid} blocked={props.blocked?.() ?? false} />}
+          account={<AccountSelector sessionID={sid} blocked={props.blocked?.() ?? false} />}
           variant={<ThinkingSelector sessionID={sid} blocked={props.blocked?.() ?? false} />}
         />
         <div class="prompt-input-hint-actions">

@@ -62,6 +62,31 @@ export type ModelUsageMap = Record<string, ModelUsage>
 
 export type ProviderAuthState = "api" | "oauth" | "wellknown"
 
+export type ProviderAccountStatus = "active" | "standby" | "cooldown" | "error"
+
+export interface ProviderAccountInfo {
+  id: string
+  label: string
+  type: ProviderAuthState
+  maskedHint: string
+  status: ProviderAccountStatus
+  active: boolean
+  priority: number
+  cooldownUntil?: number
+  lastError?: string
+  metadata?: Record<string, string>
+}
+
+export interface ProviderAccountSummary {
+  providerID: string
+  activeAccountId: string
+  workspaceAccountId?: string
+  sessionAccountId?: string
+  effectiveAccountId: string
+  autoFallback: boolean
+  accounts: ProviderAccountInfo[]
+}
+
 export interface ProviderConfig {
   name?: string
   api_key?: string

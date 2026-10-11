@@ -592,6 +592,16 @@
   max-width: 10em;
 }
 
+.prompt-selectors .prompt-selector[data-part="account"] [data-slot="popover-trigger"] {
+  max-width: 8em;
+}
+
+.account-selector-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .prompt-selector > [data-component="tooltip-trigger"] {
   flex: 1 1 auto;
   min-width: 0;

@@ -164,6 +164,7 @@ import {
   authorizeProviderOAuth as authorizeOAuthAction,
   completeProviderOAuth as completeOAuthAction,
   disconnectProvider as disconnectProviderAction,
+  manageProviderAccount as manageProviderAccountAction,
   saveCustomProvider as saveCustomProviderAction,
   resolveStoredKey,
 } from "./provider-actions"
@@ -1484,6 +1485,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         case "authorizeProviderOAuth":
         case "completeProviderOAuth":
         case "disconnectProvider":
+        case "manageProviderAccount":
         case "saveCustomProvider":
           await this.handleProviderAction(message)
           break
@@ -2871,7 +2873,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           return
         }
         try {
-          const { response, authMethods, authStates, storedKeys, organizationId, ready, unavailable } =
+          const { response, authMethods, authStates, providerAccounts, storedKeys, organizationId, ready, unavailable } =
             await fetchProviderData(client, this.getWorkspaceDirectory())
           if (generation !== this.providersGeneration || client !== this.client) {
             if (!this.providersQueued) return
@@ -2894,6 +2896,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
             ),
             authMethods,
             authStates,
+            providerAccounts,
             kiloUnavailable: unavailable,
           }
           this.cachedProvidersMessage = message
@@ -2965,10 +2968,31 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     const metadata =
       msg.metadata && typeof msg.metadata === "object" ? (msg.metadata as Record<string, unknown>) : undefined
     const inputs = msg.inputs && typeof msg.inputs === "object" ? (msg.inputs as Record<string, string>) : undefined
-    if (msg.type === "connectProvider" && key) return connectProviderAction(ctx, rid, pid, key, metadata)
-    if (msg.type === "authorizeProviderOAuth") return authorizeOAuthAction(ctx, rid, pid, method, inputs)
+    const accountId = typeof msg.accountId === "string" ? msg.accountId : undefined
+    const accountLabel = typeof msg.accountLabel === "string" ? msg.accountLabel : undefined
+    const accountMode: "add" | "edit" | "replace" | undefined =
+      msg.accountMode === "add" || msg.accountMode === "edit" || msg.accountMode === "replace"
+        ? msg.accountMode
+        : undefined
+    const accountOpts = accountId || accountLabel || accountMode ? { accountId, accountLabel, accountMode } : undefined
+    if (msg.type === "connectProvider" && key)
+      return connectProviderAction(ctx, rid, pid, key, metadata, accountOpts)
+    if (msg.type === "authorizeProviderOAuth")
+      return authorizeOAuthAction(ctx, rid, pid, method, inputs, accountOpts)
     if (msg.type === "completeProviderOAuth") return completeOAuthAction(ctx, rid, pid, method, code)
     if (msg.type === "disconnectProvider") return disconnectProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
+    if (msg.type === "manageProviderAccount" && typeof msg.action === "string") {
+      return manageProviderAccountAction(ctx, rid, pid, {
+        action: msg.action as "select" | "removeAccount" | "updateAccount" | "setFallback" | "clearCooldown",
+        accountId,
+        label: typeof msg.label === "string" ? msg.label : undefined,
+        direction: msg.direction === "up" || msg.direction === "down" ? msg.direction : undefined,
+        scope:
+          msg.scope === "global" || msg.scope === "workspace" || msg.scope === "session" ? msg.scope : undefined,
+        sessionID: typeof msg.sessionID === "string" ? msg.sessionID : this.currentSession?.id,
+        autoFallback: typeof msg.autoFallback === "boolean" ? msg.autoFallback : undefined,
+      })
+    }
     if (msg.type === "saveCustomProvider" && config)
       return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged, this.cachedConfigMessage, set)
   }

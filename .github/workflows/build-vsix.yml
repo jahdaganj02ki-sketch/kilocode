@@ -1,0 +1,51 @@
+# kilocode_change - new file
+name: build-vsix
+
+on:
+  push:
+    branches:
+      - "arena/**"
+      - main
+      - dev
+  pull_request:
+    paths:
+      - "packages/kilo-vscode/**"
+      - "packages/opencode/**"
+      - "packages/ui/**"
+      - "packages/kilo-ui/**"
+      - ".github/workflows/build-vsix.yml"
+  workflow_dispatch:
+
+jobs:
+  build-vsix:
+    name: Build VS Code VSIX
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Build VSIX package
+        working-directory: packages/kilo-vscode
+        env:
+          KILO_SKIP_BUNDLED_BWRAP: "1"
+        run: |
+          bun run snapshot:build
+          mkdir -p out
+          cp /tmp/kilo-vscode-snapshots/*.vsix out/
+          cp /tmp/kilo-vscode-snapshots/*.vsix out/kilo-code.vsix
+          ls -lh out/
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kilo-vscode-vsix
+          path: packages/kilo-vscode/out/*.vsix
+          if-no-files-found: error

@@ -4,6 +4,7 @@ import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
 import { isKiloError } from "@/kilocode/kilo-errors" // kilocode_change
 import { SessionNetwork } from "./network" // kilocode_change
+import { Auth } from "@/auth" // kilocode_change
 import { iife } from "@/util/iife"
 import { isRecord } from "@/util/record"
 
@@ -82,6 +83,22 @@ function exponential(attempt: number, random: number) {
   return Math.ceil(base + base * RETRY_JITTER_FACTOR * random)
 }
 
+const RATE_LIMIT_OR_QUOTA_PATTERN =
+  /\b429\b|rate[_\-\s]?limit|too many requests|too_many_requests|resource[_\-\s]?exhausted|insufficient[_\-\s]?quota|quota[_\-\s]?exceeded|billing[_\-\s]?hard[_\-\s]?limit/i
+
+export function isRateLimitOrQuotaError(error: Err): boolean {
+  if (SessionV1.APIError.isInstance(error)) {
+    if (error.data.statusCode === 429) return true
+    if (RATE_LIMIT_OR_QUOTA_PATTERN.test(error.data.message)) return true
+    if (typeof error.data.responseBody === "string" && RATE_LIMIT_OR_QUOTA_PATTERN.test(error.data.responseBody)) {
+      return true
+    }
+    return false
+  }
+  const message = isRecord(error.data) ? error.data.message : undefined
+  return typeof message === "string" && RATE_LIMIT_OR_QUOTA_PATTERN.test(message)
+}
+
 // kilocode_change - Kilo does not emit OpenCode Go actions
 export function retryable(error: Err, _provider?: string): Retryable | undefined {
   // context overflow errors should not be retried
@@ -90,12 +107,20 @@ export function retryable(error: Err, _provider?: string): Retryable | undefined
     const status = error.data.statusCode
     // kilocode_change start - Current Kilo errors require user action (login/signup), don't retry
     if (isKiloError(error)) return undefined
-    if (error.data.isRetryable === false && (status === undefined || status < 500) && !error.data.responseBody) return undefined
+    const canFallback = Boolean(_provider && isRateLimitOrQuotaError(error) && Auth.canFallbackToNextAccount(_provider))
+    if (
+      !canFallback &&
+      error.data.isRetryable === false &&
+      (status === undefined || status < 500) &&
+      !error.data.responseBody
+    )
+      return undefined
     // kilocode_change end
 
     // 5xx errors are transient server failures and should always be retried,
     // even when the provider SDK doesn't explicitly mark them as retryable.
     if (
+      !canFallback &&
       !error.data.isRetryable &&
       !(status !== undefined && status >= 500) &&
       !matchesRetryableMessage(error.data.message) &&
@@ -179,14 +204,29 @@ export function policy(opts: {
         if (opts.limit === undefined && attempt > RETRY_MAX_RETRIES) return yield* Cause.done(attempt)
         // kilocode_change end
         const wait = delay(attempt, SessionV1.APIError.isInstance(error) ? error : undefined) // kilocode_change
+        // kilocode_change start - Auto-fallback to next provider account on 429 / quota error
+        let effectiveWait = wait
+        let effectiveMessage = retry.message
+        if (opts.provider && isRateLimitOrQuotaError(error)) {
+          const rotation = Auth.rotateAccountInMemory({
+            providerID: opts.provider,
+            cooldownMs: Math.max(wait, 60_000),
+            message: retry.message,
+          })
+          if (rotation.rotated && rotation.nextAccount) {
+            effectiveWait = Math.min(wait, 250)
+            effectiveMessage = `${retry.message} (switching to account "${rotation.nextAccount.label}")`
+          }
+        }
+        // kilocode_change end
         const now = yield* Clock.currentTimeMillis
         yield* opts.set({
           attempt, // kilocode_change
-          message: retry.message,
+          message: effectiveMessage,
           action: retry.action,
-          next: now + wait,
+          next: now + effectiveWait,
         })
-        return [attempt, Duration.millis(wait)] as [number, Duration.Duration] // kilocode_change
+        return [attempt, Duration.millis(effectiveWait)] as [number, Duration.Duration] // kilocode_change
       })
     }),
   )

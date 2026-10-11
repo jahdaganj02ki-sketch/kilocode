@@ -17,11 +17,15 @@ import {
   isLocalProviderOptionalApiKey,
   LOCAL_PROVIDER_API_KEY_PLACEHOLDER,
 } from "../../utils/local-providers"
+import { KEEP_EXISTING_KEY_SENTINEL } from "../../../../src/shared/provider-accounts"
 import AnacondaDesktopDialog from "./AnacondaDesktopDialog"
 
 interface ProviderConnectDialogProps {
   providerID: string
   oauthOnly?: boolean
+  accountMode?: "add" | "edit"
+  accountId?: string
+  initialLabel?: string
 }
 
 interface ViewState {
@@ -62,6 +66,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   const action = createProviderAction(vscode)
 
   const [state, setState] = createStore<ViewState>({})
+  const [accountLabel, setAccountLabel] = createSignal(props.initialLabel ?? "")
 
   const item = createMemo(() => provider.providers()[props.providerID])
   const name = () => item()?.name ?? props.providerID
@@ -278,6 +283,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
 
   onMount(() => {
     if (methods().length !== 1) return
+    if (props.accountMode && methods()[0]?.type === "oauth") return
     selectMethod(0)
   })
 
@@ -337,12 +343,16 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       field: undefined,
       failed: undefined,
     })
+    const trimmedLabel = accountLabel().trim()
     action.send(
       {
         type: "authorizeProviderOAuth",
         providerID: props.providerID,
         method: index,
         inputs,
+        accountId: props.accountId,
+        accountLabel: trimmedLabel || undefined,
+        accountMode: props.accountMode,
       },
       {
         onOAuthReady: (message) => {
@@ -384,12 +394,16 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       field: undefined,
       failed: undefined,
     })
+    const trimmedLabel = accountLabel().trim()
     action.send(
       {
         type: "connectProvider",
         providerID: props.providerID,
         apiKey,
         metadata,
+        accountId: props.accountId,
+        accountLabel: trimmedLabel || undefined,
+        accountMode: props.accountMode,
       },
       {
         onConnected: succeed,
@@ -423,11 +437,30 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     )
   }
 
-  const title = () => language.t("provider.connect.title", { provider: name() })
+  const title = () => {
+    if (props.accountMode === "edit") return language.t("provider.account.title.edit", { provider: name() })
+    if (props.accountMode === "add") return language.t("provider.account.title.add", { provider: name() })
+    return language.t("provider.connect.title", { provider: name() })
+  }
+
+  const AccountLabelField: Component = () => (
+    <TextField
+      type="text"
+      autocomplete="off"
+      spellcheck={false}
+      label={language.t("provider.account.label.title")}
+      placeholder={language.t("provider.account.label.placeholder")}
+      value={accountLabel()}
+      onChange={setAccountLabel}
+    />
+  )
 
   const MethodSelection: Component = () => {
     return (
       <div class="dialog-confirm-body" style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
+        <Show when={props.accountMode}>
+          <AccountLabelField />
+        </Show>
         <div class="provider-connect-body">{language.t("provider.connect.selectMethod", { provider: name() })}</div>
         <div style={{ display: "flex", "flex-direction": "column", gap: "8px" }}>
           <For each={methods()}>
@@ -488,49 +521,63 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       return language.t("provider.connect.apiKey.required")
     }
 
-    function submit(e: SubmitEvent) {
-      e.preventDefault()
-      const trimmed = value().trim()
-      const apiKey = trimmed || (apiKeyOptional() ? LOCAL_PROVIDER_API_KEY_PLACEHOLDER : "")
-      if (!apiKey) {
-        setState({ ...state, error: apiKeyRequired(), field: "apiKey" })
-        return
+    function parseVertexServiceAccount(apiKey: string, skip: boolean) {
+      if (!vertexCredentials() || skip) return undefined
+      try {
+        const parsed = JSON.parse(apiKey) as Record<string, unknown>
+        if (parsed.type !== "service_account") return undefined
+        if (typeof parsed.client_email !== "string" || !parsed.client_email.trim()) return undefined
+        if (typeof parsed.private_key !== "string" || !parsed.private_key.trim()) return undefined
+        return parsed
+      } catch {
+        return undefined
       }
-      const serviceAccount = (() => {
-        if (!vertexCredentials()) return undefined
-        try {
-          const parsed = JSON.parse(apiKey) as Record<string, unknown>
-          if (parsed.type !== "service_account") return undefined
-          if (typeof parsed.client_email !== "string" || !parsed.client_email.trim()) return undefined
-          if (typeof parsed.private_key !== "string" || !parsed.private_key.trim()) return undefined
-          return parsed
-        } catch {
-          return undefined
-        }
-      })()
-      if (vertexCredentials() && !serviceAccount) {
-        setState({ ...state, error: language.t("provider.connect.vertex.credentials.invalid"), field: "apiKey" })
-        return
-      }
+    }
+
+    function resolveSubmittedApiKey(trimmed: string, keepExisting: boolean) {
+      if (trimmed) return trimmed
+      if (keepExisting) return KEEP_EXISTING_KEY_SENTINEL
+      if (apiKeyOptional()) return LOCAL_PROVIDER_API_KEY_PLACEHOLDER
+      return ""
+    }
+
+    function collectPromptMetadata(keepExisting: boolean): Record<string, string> | null {
       const metadata: Record<string, string> = {}
       for (const prompt of prompts()) {
         const field = (fields[prompt.key] ?? "").trim()
-        if (!field && !optional(prompt)) {
+        if (!field && !optional(prompt) && !keepExisting) {
           setState({
             ...state,
             error: language.t("provider.connect.prompt.required", { field: promptLabel(prompt) }),
             field: prompt.key,
           })
-          return
+          return null
         }
-        if (!field) continue
-        metadata[prompt.key] = field
+        if (field) metadata[prompt.key] = field
       }
-      if (
-        vertexCredentials() &&
-        !metadata.project &&
-        !(typeof serviceAccount?.project_id === "string" && serviceAccount.project_id.trim())
-      ) {
+      return metadata
+    }
+
+    function submit(e: SubmitEvent) {
+      e.preventDefault()
+      const trimmed = value().trim()
+      const keepExisting = props.accountMode === "edit" && !trimmed
+      const apiKey = resolveSubmittedApiKey(trimmed, keepExisting)
+      if (!apiKey) {
+        setState({ ...state, error: apiKeyRequired(), field: "apiKey" })
+        return
+      }
+      const serviceAccount = parseVertexServiceAccount(apiKey, keepExisting)
+      if (vertexCredentials() && !keepExisting && !serviceAccount) {
+        setState({ ...state, error: language.t("provider.connect.vertex.credentials.invalid"), field: "apiKey" })
+        return
+      }
+      const metadata = collectPromptMetadata(keepExisting)
+      if (!metadata) return
+      const hasProject =
+        Boolean(metadata.project) ||
+        (typeof serviceAccount?.project_id === "string" && Boolean(serviceAccount.project_id.trim()))
+      if (vertexCredentials() && !keepExisting && !hasProject) {
         setState({
           ...state,
           error: language.t("provider.connect.vertex.project.required"),
@@ -543,6 +590,14 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       connect(apiKey, Object.keys(metadata).length > 0 ? metadata : undefined)
     }
 
+    function apiKeyPlaceholder() {
+      if (props.accountMode === "edit") return language.t("provider.account.keepKey.placeholder")
+      if (bedrockKeys()) return language.t("provider.connect.bedrock.accessKeyId.placeholder")
+      if (vertexCredentials()) return language.t("provider.connect.vertex.credentials.placeholder")
+      if (apiKeyOptional()) return language.t("provider.connect.apiKey.placeholder.optional")
+      return language.t("provider.connect.apiKey.placeholder")
+    }
+
     return (
       <form
         class="dialog-confirm-body"
@@ -550,6 +605,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
         onSubmit={submit}
       >
         <div class="provider-connect-body">{apiKeyDescription()}</div>
+        <AccountLabelField />
         <TextField
           autofocus
           type={vertexCredentials() ? "text" : "password"}
@@ -561,15 +617,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
           autocomplete="off"
           spellcheck={false}
           label={apiKeyLabel()}
-          placeholder={
-            bedrockKeys()
-              ? language.t("provider.connect.bedrock.accessKeyId.placeholder")
-              : vertexCredentials()
-                ? language.t("provider.connect.vertex.credentials.placeholder")
-                : apiKeyOptional()
-                  ? language.t("provider.connect.apiKey.placeholder.optional")
-                  : language.t("provider.connect.apiKey.placeholder")
-          }
+          placeholder={apiKeyPlaceholder()}
           value={value()}
           onChange={setValue}
           validationState={state.field === "apiKey" ? "invalid" : undefined}
@@ -699,6 +747,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
         style={{ display: "flex", "flex-direction": "column", gap: "16px" }}
         onSubmit={submit}
       >
+        <AccountLabelField />
         <PromptFields
           prompts={prompts()}
           fields={fields}
